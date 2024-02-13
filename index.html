@@ -1,0 +1,1905 @@
+<html>
+  <head>
+    <title>Bouncing Bubbles</title>
+
+    <script id="fxhash-snippet">
+      //---- do not edit the following code (you can indent as you wish) - This section connects the code to FX Hash, allowing for testing and minting
+      let search = new URLSearchParams(window.location.search);
+      let alphabet =
+        "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+      let b58dec = (str) =>
+        [...str].reduce(
+          (p, c) => (p * alphabet.length + alphabet.indexOf(c)) | 0,
+          0
+        );
+      // make fxrand from hash
+      var fxhash =
+        search.get("fxhash") ||
+        "oo" +
+          Array(49)
+            .fill(0)
+            .map((_) => alphabet[(Math.random() * alphabet.length) | 0])
+            .join("");
+      let fxhashTrunc = fxhash.slice(2);
+      let regex = new RegExp(".{" + ((fxhash.length / 4) | 0) + "}", "g");
+      let hashes = fxhashTrunc.match(regex).map((h) => b58dec(h));
+      let sfc32 = (a, b, c, d) => {
+        return () => {
+          a |= 0;
+          b |= 0;
+          c |= 0;
+          d |= 0;
+          var t = (((a + b) | 0) + d) | 0;
+          d = (d + 1) | 0;
+          a = b ^ (b >>> 9);
+          b = (c + (c << 3)) | 0;
+          c = (c << 21) | (c >>> 11);
+          c = (c + t) | 0;
+          return (t >>> 0) / 4294967296;
+        };
+      };
+      var fxrand = sfc32(...hashes);
+      // make fxrandminter from minter address
+      var fxminter =
+        search.get("fxminter") ||
+        "tz1" +
+          Array(33)
+            .fill(0)
+            .map((_) => alphabet[(Math.random() * alphabet.length) | 0])
+            .join("");
+      let fxminterTrunc = fxminter.slice(3);
+      regex = new RegExp(".{" + ((fxminterTrunc.length / 4) | 0) + "}", "g");
+      hashes = fxminterTrunc.match(regex).map((h) => b58dec(h));
+      var fxrandminter = sfc32(...hashes);
+
+      // true if preview mode active, false otherwise
+      // you can append preview=1 to the URL to simulate preview active
+      var isFxpreview = search.get("preview") === "1";
+      // call this method to trigger the preview
+      function fxpreview() {
+        window.dispatchEvent(new Event("fxhash-preview"));
+        setTimeout(() => fxpreview(), 500);
+      }
+      // get the byte params from the URL
+      let fxparams = search.get("fxparams");
+      fxparams = fxparams ? fxparams.replace("0x", "") : fxparams;
+
+      // the parameter processor, used to parse fxparams
+      const processors = {
+        number: {
+          deserialize: (input) => {
+            const view = new DataView(new ArrayBuffer(8));
+            for (let i = 0; i < 8; i++) {
+              view.setUint8(i, parseInt(input.substring(i * 2, i * 2 + 2), 16));
+            }
+            return view.getFloat64(0);
+          },
+          bytesLength: () => 8,
+          constrain: (value, definition) => {
+            let min = Number.MIN_SAFE_INTEGER;
+            if (typeof definition.options?.min !== "undefined")
+              min = Number(definition.options.min);
+            let max = Number.MAX_SAFE_INTEGER;
+            if (typeof definition.options?.max !== "undefined")
+              max = Number(definition.options.max);
+            max = Math.min(max, Number.MAX_SAFE_INTEGER);
+            min = Math.max(min, Number.MIN_SAFE_INTEGER);
+            const v = Math.min(Math.max(value, min), max);
+            return v;
+          },
+          random: (definition) => {
+            let min = Number.MIN_SAFE_INTEGER;
+            if (typeof definition.options?.min !== "undefined")
+              min = Number(definition.options.min);
+            let max = Number.MAX_SAFE_INTEGER;
+            if (typeof definition.options?.max !== "undefined")
+              max = Number(definition.options.max);
+            max = Math.min(max, Number.MAX_SAFE_INTEGER);
+            min = Math.max(min, Number.MIN_SAFE_INTEGER);
+            const v = Math.random() * (max - min) + min;
+            if (definition?.options?.step) {
+              const t = 1.0 / definition?.options?.step;
+              return Math.round(v * t) / t;
+            }
+            return v;
+          },
+        },
+        bigint: {
+          deserialize: (input) => {
+            const view = new DataView(new ArrayBuffer(8));
+            for (let i = 0; i < 8; i++) {
+              view.setUint8(i, parseInt(input.substring(i * 2, i * 2 + 2), 16));
+            }
+            return view.getBigInt64(0);
+          },
+          bytesLength: () => 8,
+          random: (definition) => {
+            const MIN_SAFE_INT64 = -9223372036854775808n;
+            const MAX_SAFE_INT64 = 9223372036854775807n;
+            let min = MIN_SAFE_INT64;
+            let max = MAX_SAFE_INT64;
+            if (typeof definition.options?.min !== "undefined")
+              min = BigInt(definition.options.min);
+            if (typeof definition.options?.max !== "undefined")
+              max = BigInt(definition.options.max);
+            const range = max - min;
+            const bits = range.toString(2).length;
+            let random;
+            do {
+              random = BigInt(
+                "0b" +
+                  Array.from(
+                    crypto.getRandomValues(new Uint8Array(Math.ceil(bits / 8)))
+                  )
+                    .map((b) => b.toString(2).padStart(8, "0"))
+                    .join("")
+              );
+            } while (random > range);
+            return random + min;
+          },
+        },
+        boolean: {
+          // if value is "00" -> 0 -> false, otherwise we consider it's 1
+          deserialize: (input) => {
+            return input === "00" ? false : true;
+          },
+          bytesLength: () => 1,
+          random: () => Math.random() < 0.5,
+        },
+        color: {
+          deserialize: (input) => input,
+          bytesLength: () => 4,
+          transform: (input) => {
+            const r = parseInt(input.slice(0, 2), 16);
+            const g = parseInt(input.slice(2, 4), 16);
+            const b = parseInt(input.slice(4, 6), 16);
+            const a = parseInt(input.slice(6, 8), 16);
+            return {
+              hex: {
+                rgb: "#" + input.slice(0, 6),
+                rgba: "#" + input,
+              },
+              obj: {
+                rgb: { r, g, b },
+                rgba: { r, g, b, a },
+              },
+              arr: {
+                rgb: [r, g, b],
+                rgba: [r, g, b, a],
+              },
+            };
+          },
+          constrain: (value, definition) => {
+            const hex = value.replace("#", "");
+            return hex.slice(0, 8).padEnd(8, "f");
+          },
+          random: () =>
+            `${[...Array(8)]
+              .map(() => Math.floor(Math.random() * 16).toString(16))
+              .join("")}`,
+        },
+        string: {
+          deserialize: (input) => {
+            const hx = input.match(/.{1,4}/g) || [];
+            let rtn = "";
+            for (let i = 0; i < hx.length; i++) {
+              const int = parseInt(hx[i], 16);
+              if (int === 0) break;
+              rtn += String.fromCharCode(int);
+            }
+            return rtn;
+          },
+          bytesLength: (options) => {
+            if (typeof options?.maxLength !== "undefined")
+              return Number(options.maxLength) * 2;
+            return 64 * 2;
+          },
+          constrain: (value, definition) => {
+            let min = 0;
+            if (typeof definition.options?.minLength !== "undefined")
+              min = definition.options.minLength;
+            let max = 64;
+            if (typeof definition.options?.maxLength !== "undefined")
+              max = definition.options.maxLength;
+            let v = value.slice(0, max);
+            if (v.length < min) {
+              return v.padEnd(min);
+            }
+            return v;
+          },
+          random: (definition) => {
+            let min = 0;
+            if (typeof definition.options?.minLength !== "undefined")
+              min = definition.options.minLength;
+            let max = 64;
+            if (typeof definition.options?.maxLength !== "undefined")
+              max = definition.options.maxLength;
+            const length = Math.round(Math.random() * (max - min) + min);
+            return [...Array(length)]
+              .map((i) => (~~(Math.random() * 36)).toString(36))
+              .join("");
+          },
+        },
+        select: {
+          deserialize: (input, definition) => {
+            return (
+              definition.options.options[parseInt(input, 16)] ||
+              definition.default
+            );
+          },
+          bytesLength: () => 1,
+          constrain: (value, definition) => {
+            if (definition.options.options.includes(value)) {
+              return value;
+            }
+            return definition.options.options[0];
+          },
+          random: (definition) => {
+            const index = Math.round(
+              Math.random() * (definition?.options?.options?.length - 1) + 0
+            );
+            return definition?.options?.options[index];
+          },
+        },
+      };
+
+      // takes the parameters as bytes and outputs an object with the
+      // deserialized parameters, identified by their id in an object
+      const deserializeParams = (bytes, definition) => {
+        const params = {};
+        for (const def of definition) {
+          const processor = processors[def.type];
+          // if we don't have any parameters defined in the URL, set the
+          // default value and move on
+          if (!bytes) {
+            let v;
+            if (typeof def.default === "undefined") v = processor.random(def);
+            else v = def.default;
+            params[def.id] = processor.constrain?.(v, def) || v;
+            continue;
+          }
+          // extract the length from the bytes & shift the initial bytes string
+          const valueBytes = bytes.substring(
+            0,
+            processor.bytesLength(def?.options) * 2
+          );
+          bytes = bytes.substring(processor.bytesLength(def?.options) * 2);
+          // deserialize the bytes into the params
+          const value = processor.deserialize(valueBytes, def);
+          params[def.id] = processor.constrain?.(value, def) || value;
+        }
+        return params;
+      };
+
+      const transformParamValues = (values, definitions) => {
+        const paramValues = {};
+        for (const def of definitions) {
+          const processor = processors[def.type];
+          const value = values[def.id];
+          // deserialize the bytes into the params
+          paramValues[def.id] = processor.transform
+            ? processor.transform(value)
+            : value;
+        }
+        return paramValues;
+      };
+
+      window.$fx = {
+        _version: "3.0.0",
+        _processors: processors,
+        // where params def & features will be stored
+        _params: undefined,
+        _features: undefined,
+        // where the parameter values are stored
+        _paramValues: {},
+
+        hash: fxhash,
+        rand: fxrand,
+
+        minter: fxminter,
+        randminter: fxrandminter,
+
+        preview: fxpreview,
+        isPreview: isFxpreview,
+        params: function (definition) {
+          // todo: maybe do some validation on the dev side ?
+          // or maybe not ?
+          this._params = definition;
+          this._rawValues = deserializeParams(fxparams, definition);
+          this._paramValues = transformParamValues(this._rawValues, definition);
+        },
+        features: function (features) {
+          this._features = features;
+        },
+        getFeature: function (id) {
+          return this._features[id];
+        },
+        getFeatures: function () {
+          return this._features;
+        },
+        getParam: function (id) {
+          return this._paramValues[id];
+        },
+        getParams: function () {
+          return this._paramValues;
+        },
+        getRawParam: function (id) {
+          return this._rawValues[id];
+        },
+        getRawParams: function () {
+          return this._rawValues;
+        },
+        getDefinitions: function () {
+          return this._params;
+        },
+        stringifyParams: function (params) {
+          return JSON.stringify(
+            params,
+            (key, value) => {
+              if (typeof value === "bigint") return value.toString();
+              return value;
+            },
+            2
+          );
+        },
+      };
+      window.addEventListener("message", (event) => {
+        if (event.data === "fxhash_getInfo") {
+          parent.postMessage(
+            {
+              id: "fxhash_getInfo",
+              data: {
+                version: window.$fx._version,
+                hash: window.$fx.hash,
+                features: window.$fx.getFeatures(),
+                params: {
+                  definitions: window.$fx.getDefinitions(),
+                  values: window.$fx.getRawParams(),
+                },
+                minter: window.$fx.minter,
+              },
+            },
+            "*"
+          );
+        }
+      });
+      // END NEW
+
+      //---- /do not edit the following code
+    </script>
+
+    <script>
+      // shim layer with setTimeout fallback
+      window.requestAnimFrame = (function () {
+        return (
+          window.requestAnimationFrame ||
+          window.webkitRequestAnimationFrame ||
+          window.mozRequestAnimationFrame ||
+          window.oRequestAnimationFrame ||
+          window.msRequestAnimationFrame ||
+          function (callback) {
+            window.setTimeout(callback, 1000 / 60);
+          }
+        );
+      })();
+    </script>
+  </head>
+
+  <body style="margin: 0px">
+    <canvas id="myCanvas"></canvas>
+    <script>
+      //---- This is where the main code begins for drawing the canvas and creating the interactivity
+      (function () {
+        // Define the artwork attributes
+        const outputData = {
+          // Number of circles
+          numCirclesFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 4,
+            maxValue: 225,
+            outputValue: 0,
+            controlKey: "N",
+          },
+          // Intensity of the vertical pull on the circles
+          gravityFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: -0.05,
+            maxValue: 0.05,
+            outputValue: 0,
+            controlKey: "V",
+          },
+          // Intensity of polarity (how hard circles bounce off each other or attract to each other)
+          polarityFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: -0.25,
+            maxValue: 0.25,
+            outputValue: 0,
+            controlKey: "P",
+          },
+          // How much the circles slow down on their own (stickiness of the environment)
+          dampeningFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0.75,
+            maxValue: 1.005,
+            outputValue: 0,
+            controlKey: "D",
+          },
+          // RGB R value for the circles
+          redColorFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0,
+            maxValue: 255,
+            outputValue: 0,
+            controlKey: "C + R",
+          },
+          // RGB G value for the circles
+          greenColorFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0,
+            maxValue: 255,
+            outputValue: 0,
+            controlKey: "C + G",
+          },
+          // RGB B value for the circles
+          blueColorFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0,
+            maxValue: 255,
+            outputValue: 0,
+            controlKey: "C + B",
+          },
+          // RGB R value for the window
+          redWindowColor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0,
+            maxValue: 255,
+            outputValue: 0,
+            controlKey: "W + R",
+          },
+          // RGB G value for the window
+          greenWindowColor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0,
+            maxValue: 255,
+            outputValue: 0,
+            controlKey: "W + G",
+          },
+          // RGB B value for the window
+          blueWindowColor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0,
+            maxValue: 255,
+            outputValue: 0,
+            controlKey: "W + B",
+          },
+          // Transparency of the trail created by circle movement (lower value = less transparency)
+          trailAlpha: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 0,
+            maxValue: 0.28,
+            outputValue: 0,
+            controlKey: "T",
+          },
+          // Size of the cirlces
+          circleRadiusFactor: {
+            rawTxHashSegment: "",
+            transformedTxHashSegment: "",
+            minValue: 1,
+            maxValue: 150,
+            outputValue: 0,
+            controlKey: "S",
+          },
+        };
+
+        // Take in transaction hash
+        const txHash = fxhash;
+        console.log("txHash: " + txHash);
+
+        // Split txHash into groups of n characters and create an array with those groups.
+        const txArray = [];
+        var groupSize = 3;
+        var numGroups = 0;
+        for (let i = 0; i < txHash.length; i += groupSize) {
+          const characterBlock = txHash.slice(i, i + groupSize);
+          txArray.push(characterBlock);
+          numGroups++;
+        }
+
+        console.log("numGroups: " + numGroups);
+        console.log("txArray: " + txArray);
+
+        // This function returns the Nth digit of pi based on a numerical input
+        function getPiVersion(inputCharCode) {
+          var piString =
+            "314159265358979323846264338327950288419716939937510582097494459230781640628620899862803482534211706798214808651328230664709384460955058223172535940812848111745028410270193852110555964462294895493038196442881097566593344612847564823378678316527120190914564856692346034861045432664821339360726024914127372458700660631558817488152092096282925409171536436789259036001133053054882046652138414695194151160943305727036575959195309218611738193261179310511854807446237996274956735188575272489122793818301194912983367336244065664308602139494639522473719070217986094370277053921717629317675238467481846766940513200056812714526356082778577134275778960917363717872146844090122495343014654958537105079227968925892354201995611212902196086403441815981362977477130996051870721134999999837297804995105973173281609631859502445945534690830264252230825334468503526193118817101000313783875288658753320838142061717766914730359825349042875546873115956286388235378759375195778185778053217122680661300192787661119590921642019893809525720106548586327886593615338182796823030195203530185296899577362259941389124972177528347913151557485724245415069595082953311686172785588907509838175463746493931925506040092770167113900984882401285836160356370766010471018194295559619894676783744944825537977472684710404753464620804668425906949129331367702898915210475216205696602405803815019351125338243003558764024749647326391419927260426992279678235478163600934172164121992458631503028618297455570674983850549458858692699569092721079750930295532116534498720275596023648066549911988183479775356636980742654252786255181841757467289097777279380008164706001614524919217321721477235014144197356854816136115735255213347574184946843852332390739414333454776241686251898356948556209921922218427255025425688767179049460165346680498862723279178608578438382796797668145410095388378636095068006422512520511739298489608412848862694560424196528502221066118630674427862203919494504712371378696095636437191728746776465757396241389086583264599581339047802759009946576407895126946839835259570982582262052248940772671947826848260147699090264013639443745530506820349625245174939965143142980919065925093722169646151570985838741059788595977297549893016175392846813826868386894277415599185592524595395943104997252468084598727364469584865383673622262609912460805124388439045124413654976278079771569143599770012961608944169486855584840635342207222582848864815845602850601684273945226746767889525213852254995466672782398645659611635488623057745649803559363456817432411251507606947945109659609402522887971089314566913686722874894056010150330861792868092087476091782493858900971490967598526136554978189312978482168299894872265880485756401427047755513237964145152374623436454285844479526586782105114135473573952311342716610213596953623144295248493718711014576540359027993440374200731057853906219838744780847848968332144571386875194350643021845319104848100537061468067491927819119793995206141966342875444064374512371819217999839101591956181467514269123974894090718649423196156794520809514655022523160388193014209376213785595663893778708303906979207734672218256259966150142150306803844773454920260541466592520149744285073251866600213243408819071048633173464965145390579626856100550810665879699816357473638405257145910289706414011097120628043903975951567715770042033786993600723055876317635942187312514712053292819182618612586732157919841484882916447060957527069572209175671167229109816909152801735067127485832228718352093539657251210835791513698820914442100675103346711031412671113699086585163983150197016515116851714376576183515565088490998985998238734552833163550764791853589322618548963213293308985706420467525907091548141654985946163718027098199430992448895757128289059232332609729971208443357326548938239119325974636673058360414281388303203824903758985243744170291327656180937734440307074692112019130203303801976211011004492932151608424448596376698389522868478312355265821314495768572624334418930396864262434107732269780280731891544110104468232527162010526522721116603966655730925471105578537634668206531098965269186205647693125705863566201855810072936065987648611791045334885034611365768675324944166803962657978771855608455296541266540853061434443185867697514566140680070023787765913440171274947042056223053899456131407112700040785473326993908145466464588079727082668306343285878569830523580893306575740679545716377525420211495576158140025012622859413021647155097925923099079654737612551765675135751782966645477917450112996148903046399471329621073404375189573596145890193897131117904297828564750320319869151402870808599048010941214722131794764777262241425485454033215718530614228813758504306332175182979866223717215916077166925474873898665494945011465406284336639379003976926567214638530673609657120918076383271664162748888007869256029022847210403172118608204190004229661711963779213375751149595015660496318629472654736425230817703675159067350235072835405670403867435136222247715891504953098444893330963408780769325993978054193414473774418426";
+          var nthDigitOfPi = piString[inputCharCode];
+          console.log("nthDigitOfPi: " + nthDigitOfPi);
+          return nthDigitOfPi;
+        }
+
+        // Convert each group of n characters in the array into a numerical value using Pi - these numerical values are unscaled and need to be refined further
+        const transformedArray = txArray.map((characterBlock, i) => {
+          const unscaledInteger = characterBlock
+            .split("")
+            .map((x) => getPiVersion(x.charCodeAt(0) - 48))
+            .reduce((a, b) => a + "" + b);
+          console.log("unscaledInteger: " + unscaledInteger);
+          return unscaledInteger;
+        });
+        console.log("transformedArray: " + transformedArray);
+
+        // Use the unscaled numerical values to define an order for how each section will be used in to drive the artwork attributes
+        var orderInteger =
+          transformedArray[1] +
+          transformedArray[2] +
+          transformedArray[3] +
+          transformedArray[4] +
+          transformedArray[5];
+        var orderString = orderInteger.toString();
+        console.log("orderString: " + orderString);
+
+        // Create a scaled version of the numerical value
+        function scaleNumber(array, index, scaledMin, scaledMax) {
+          const unscaledInteger = array[index];
+          const unscaledMin = 0,
+            unscaledMax = 10 ** groupSize - 1;
+          //   var unscaledAverage = (unscaledMax + unscaledMin) / 2;
+          //   var scaledAverage = (scaledMax + scaledMin) / 2;
+          var scaledNumber =
+            (unscaledInteger / (unscaledMax - unscaledMin)) *
+              (scaledMax - scaledMin) +
+            scaledMin;
+          return scaledNumber;
+        }
+
+        // Convert all of the fully ordered numerical values to visuals, scaling them according to each attributes rules
+        function convertIntegersToVisuals() {
+          // Use orderString to determine the index that should be linked to each variable - increment across orderString to determine the numbers that drive each variable
+          var characterIndicator = 0,
+            indexForVariable =
+              Number(orderString.charAt(characterIndicator)) + 7;
+
+          // Set number of circles
+          outputData.numCirclesFactor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.numCirclesFactor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.numCirclesFactor.outputValue = Math.round(
+            scaleNumber(
+              transformedArray,
+              indexForVariable,
+              outputData.numCirclesFactor.minValue,
+              outputData.numCirclesFactor.maxValue
+            )
+          );
+
+          // Set gravity
+          characterIndicator++;
+          var decimalPlaceNumber = 10000;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.gravityFactor.rawTxHashSegment = txArray[indexForVariable];
+          outputData.gravityFactor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.gravityFactor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.gravityFactor.minValue,
+                  outputData.gravityFactor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          // Make zero gravity more common for aesthetic
+          if (
+            outputData.gravityFactor.outputValue > -0.025 &&
+            outputData.gravityFactor.outputValue < 0.025
+          ) {
+            outputData.gravityFactor.outputValue = 0;
+          }
+
+          // Set polarity
+          characterIndicator++;
+          decimalPlaceNumber = 10000;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.polarityFactor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.polarityFactor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.polarityFactor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.polarityFactor.minValue,
+                  outputData.polarityFactor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          // Set dampening based on the polarity
+          outputData.dampeningFactor.outputValue =
+            1 - Math.abs(outputData.polarityFactor.outputValue / 1000);
+
+          // Set red, green, and blue values for the circles
+          characterIndicator++;
+          decimalPlaceNumber = 1;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.redColorFactor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.redColorFactor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+          outputData.redColorFactor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.redColorFactor.minValue,
+                  outputData.redColorFactor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          characterIndicator++;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.greenColorFactor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.greenColorFactor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.greenColorFactor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  Number(orderString.charAt(5)) + 7,
+                  outputData.greenColorFactor.minValue,
+                  outputData.greenColorFactor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          characterIndicator++;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.blueColorFactor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.blueColorFactor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.blueColorFactor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.blueColorFactor.minValue,
+                  outputData.blueColorFactor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          // Set red, green, and blue values for the window
+          characterIndicator++;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.redWindowColor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.redWindowColor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.redWindowColor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.redWindowColor.minValue,
+                  outputData.redWindowColor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          characterIndicator++;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.greenWindowColor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.greenWindowColor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.greenWindowColor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.greenWindowColor.minValue,
+                  outputData.greenWindowColor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          characterIndicator++;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.blueWindowColor.rawTxHashSegment =
+            txArray[indexForVariable];
+          outputData.blueWindowColor.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.blueWindowColor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.blueWindowColor.minValue,
+                  outputData.blueWindowColor.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          // Set the trail alpha based on the eleventh group
+          characterIndicator++;
+          decimalPlaceNumber = 100;
+          indexForVariable = Number(orderString.charAt(characterIndicator)) + 7;
+          outputData.trailAlpha.rawTxHashSegment = txArray[indexForVariable];
+          outputData.trailAlpha.transformedTxHashSegment =
+            transformedArray[indexForVariable];
+
+          outputData.trailAlpha.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                scaleNumber(
+                  transformedArray,
+                  indexForVariable,
+                  outputData.trailAlpha.minValue,
+                  outputData.trailAlpha.maxValue
+                )
+            ) / decimalPlaceNumber;
+
+          // Set the circle radius
+          decimalPlaceNumber = 1;
+          outputData.circleRadiusFactor.outputValue =
+            Math.round(
+              decimalPlaceNumber *
+                Math.max(
+                  Math.min(
+                    (Math.sqrt(window.innerWidth * window.innerHeight) *
+                      31.4 *
+                      transformedArray
+                        .map((x) => Math.floor((x / 10) % 10))
+                        .reduce((a, b) => a + b)) /
+                      transformedArray
+                        .map((x) => Math.floor((x / 10) % 100))
+                        .reduce((a, b) => a + b) /
+                      outputData.numCirclesFactor.outputValue,
+                    outputData.circleRadiusFactor.maxValue
+                  ),
+                  outputData.circleRadiusFactor.minValue
+                )
+            ) / decimalPlaceNumber;
+        }
+
+        // Convert all of the fully ordered numerical values to visuals
+        convertIntegersToVisuals();
+
+        // Console log each data point in the arrays and the output values
+        for (const key in outputData) {
+          console.log(key + ":", outputData[key]);
+        }
+
+        // Console log instructions for the user
+        console.log(
+          "Use the Up and Down Arrows in combination with a variable key to increase or decrease that variable. Use the Left and Right arrows to increase or decrease the speed. Try using C for circle, W for window, and R for red. There are many other Funky hidden easter eggs for you to discover!"
+        );
+
+        // Create canvas, set certain default values
+        var canv = document.getElementById("myCanvas"),
+          c = canv.getContext("2d"),
+          gravity = outputData.gravityFactor.outputValue,
+          dampening = outputData.dampeningFactor.outputValue,
+          pullStrength = -0.000314,
+          circles = [],
+          numCircles = outputData.numCirclesFactor.outputValue,
+          polarity = outputData.polarityFactor.outputValue,
+          mouseDown = false,
+          mouseX,
+          mouseY,
+          sizeTracker = 0,
+          speedTracker = 1,
+          frameTracker = 0,
+          trailTracker = 0,
+          redCircleTracker = 0,
+          greenCircleTracker = 0,
+          blueCircleTracker = 0,
+          redWindowTracker = 0,
+          greenWindowTracker = 0,
+          blueWindowTracker = 0,
+          trailAlpha = outputData.trailAlpha.outputValue,
+          funkyTime = false,
+          maxVelocity = 10;
+
+        // Set 1/100 probability that funkyTime is set to true by default - 13 is my lucky number
+        if (Number(orderString.slice(0, 2)) == 13) {
+          funkyTime = true;
+        }
+
+        // Set features for mint attributes
+        window.$fx.features({
+          "Number of Circles": Math.round(
+            outputData.numCirclesFactor.outputValue
+          ),
+          "Vertical Gravity": outputData.gravityFactor.outputValue.toFixed(4),
+          "Polarity Strength": outputData.polarityFactor.outputValue.toFixed(4),
+          "Dampening Strength":
+            outputData.dampeningFactor.outputValue.toFixed(4),
+          "Circles Red Value": Math.round(
+            outputData.redColorFactor.outputValue
+          ),
+          "Circles Green Value": Math.round(
+            outputData.greenColorFactor.outputValue
+          ),
+          "Circles Blue Value": Math.round(
+            outputData.blueColorFactor.outputValue
+          ),
+          "Window Red Value": Math.round(outputData.redWindowColor.outputValue),
+          "Window Green Value": Math.round(
+            outputData.greenWindowColor.outputValue
+          ),
+          "Window Blue Value": Math.round(
+            outputData.blueWindowColor.outputValue
+          ),
+          "Trail Transparency": outputData.trailAlpha.outputValue.toFixed(4),
+          "Funky Time": funkyTime,
+        });
+
+        // Set canvas size to browser window size
+        canv.width = window.innerWidth;
+        canv.height = window.innerHeight;
+
+        // Auto resize the canvas to the browser window if changed
+        window.onresize = function () {
+          canv.width = window.innerWidth;
+          canv.height = window.innerHeight;
+        };
+
+        // Starting window color
+        c.fillStyle =
+          "rgba(" +
+          outputData.redWindowColor.outputValue +
+          "," +
+          outputData.greenWindowColor.outputValue +
+          "," +
+          outputData.blueWindowColor.outputValue +
+          ",1.0)";
+        c.fillRect(0, 0, canv.width, canv.height);
+
+        // Initialize the array of circle objects
+        function initializeCircles() {
+          for (var i = 0; i < numCircles; i++) {
+            circles.push({
+              x: Math.random() * canv.width,
+              y: Math.random() * canv.height,
+              // (vx, vy) = Velocity vector
+              vx: 0,
+              vy: 0,
+              radius: outputData.circleRadiusFactor.outputValue,
+            });
+          }
+        }
+
+        // This function is called 60 times each second (THIS CONTAINS ALL THE CONTROL FUNCTIONS)
+        function executeFrame() {
+          frameTracker++;
+
+          // Increment through all of the circles that need to be created
+          var i, j, circle;
+
+          // Draw all of the circles
+          for (i = 0; i < numCircles; i++) {
+            circle = circles[i];
+
+            // Handle velocity, gravity, and dampening
+            incrementSimulation(circle);
+
+            // Bounce off the 4 walls
+            bounce(circle);
+
+            // Collision for all pairs
+            for (j = i + 1; j < numCircles; j++) {
+              collide(circle, circles[j]);
+            }
+
+            // Draw each circle (radius and color)
+            c.beginPath();
+            c.arc(circle.x, circle.y, circle.radius, 0, 2 * Math.PI);
+            c.closePath();
+
+            let redValue =
+              outputData.redColorFactor.outputValue +
+              13.1415926 * (Math.abs(circle.vx) + Math.abs(circle.vy));
+            let greenValue =
+              outputData.greenColorFactor.outputValue +
+              13.1415926 * (Math.abs(circle.vx) + Math.abs(circle.vy));
+            let blueValue =
+              outputData.blueColorFactor.outputValue +
+              13.1415926 * (Math.abs(circle.vx) + Math.abs(circle.vy));
+            let alpha = 1;
+
+            let rgbaColor =
+              "rgba(" +
+              redValue +
+              ", " +
+              greenValue +
+              ", " +
+              blueValue +
+              ", " +
+              alpha +
+              ")";
+
+            //Funky color for all circles when F is pressed.
+            if (funkyTime == true) {
+              rgbaColor =
+                "rgba(" +
+                (((Math.abs(circle.vx) + Math.abs(circle.vy)) * 3.14) %
+                  redValue) *
+                  Math.random() *
+                  3.14 *
+                  10 +
+                ", " +
+                (((Math.abs(circle.vx) + Math.abs(circle.vy)) * 3.14) %
+                  greenValue) *
+                  Math.random() *
+                  3.14 *
+                  10 +
+                ", " +
+                (((Math.abs(circle.vx) + Math.abs(circle.vy)) * 3.14) %
+                  blueValue) *
+                  Math.random() *
+                  3.14 *
+                  10 +
+                ", " +
+                alpha +
+                ")";
+            }
+
+            c.fillStyle = rgbaColor;
+            c.fill();
+          }
+
+          // Fill a semi-transparent white rectangle for the ghosting trail effect
+          c.fillStyle =
+            "rgba(" +
+            outputData.redWindowColor.outputValue +
+            "," +
+            outputData.greenWindowColor.outputValue +
+            "," +
+            outputData.blueWindowColor.outputValue +
+            "," +
+            trailAlpha +
+            ")";
+          c.fillRect(0, 0, canv.width, canv.height);
+
+          // Increment mouse interaction (pushing away from mouse)
+          handleMouseInteraction();
+
+          //These functions are limited to prevent unintended iterations
+          if (frameTracker % 10 == 0) {
+            // Increment p key interaction (polarity)
+            adjustPolarity();
+
+            // Increment D key interaction (dampening)
+            adjustDampening();
+
+            // Increment space bar interaction (stopping)
+            adjustSize();
+
+            // Increment plus key interaction (increase circle count)
+            adjustCircleCount();
+
+            // Increment Up Right key interaction (speed up)
+            adjustSpeed();
+
+            // Increment G Key Gravity
+            adjustGravity();
+
+            // Increment T Key Trail
+            adjustTrail();
+
+            // Increment R key interaction (reversing)
+            reverseCircles();
+
+            // Increment F key interaction (funky colors)
+            funkyCircles();
+
+            // Increment M key interaction (mouse effect)
+            mouseEffect();
+
+            // Increment RGB key interaction (Colors)
+            adjustColors();
+          }
+
+          // Increment A key interaction (align)
+          alignGrid();
+
+          // Increment E/I keys interaction (explode/implode)
+          explodeImplode();
+
+          // Schedule the next frame
+          requestAnimFrame(executeFrame);
+        }
+
+        // Moves circles
+        function incrementSimulation(circle) {
+          // Increment location by velocity
+          circle.x += circle.vx;
+          circle.y += circle.vy;
+
+          // Increment Gravity
+          circle.vy += gravity;
+
+          // Slow it down
+          circle.vy *= dampening;
+          circle.vx *= dampening;
+        }
+
+        // Bounces circles off edges
+        function bounce(circle) {
+          // bottom
+          if (circle.y + circle.radius > canv.height) {
+            circle.y = canv.height - circle.radius;
+            circle.vy = -Math.abs(circle.vy);
+          }
+          // right
+          if (circle.x + circle.radius > canv.width) {
+            circle.x = canv.width - circle.radius;
+            circle.vx = -Math.abs(circle.vx);
+          }
+          // top
+          if (circle.y - circle.radius < 0) {
+            circle.y = circle.radius;
+            circle.vy = Math.abs(circle.vy);
+          }
+          // left
+          if (circle.x - circle.radius < 0) {
+            circle.x = circle.radius;
+            circle.vx = Math.abs(circle.vx);
+          }
+        }
+
+        // Collides two circles `a` and `b`.
+        function collide(a, b) {
+          // (dx, dy) distance in x and y
+          var dx = b.x - a.x,
+            dy = b.y - a.y,
+            // d = distance from `a` to `b`
+            d = Math.sqrt(dx * dx + dy * dy),
+            // (ux, uy) = unit vector
+            // in the a -> b direction
+            ux = dx / d,
+            uy = dy / d;
+
+          // If the balls are on top of one another,
+          if (d <= a.radius + b.radius && polarity != 0) {
+            // then execute a repulsive force to
+            // push them apart, which resembles collision.
+            a.vx -= ux * polarity;
+            a.vy -= uy * polarity;
+            b.vx += ux * polarity;
+            b.vy += uy * polarity;
+
+            // Set maximum speeds
+            a.vx = Math.max(Math.min(a.vx, maxVelocity), -maxVelocity);
+            a.vy = Math.max(Math.min(a.vy, maxVelocity), -maxVelocity);
+            b.vx = Math.max(Math.min(b.vx, maxVelocity), -maxVelocity);
+            a.vy = Math.max(Math.min(a.vy, maxVelocity), -maxVelocity);
+          }
+        }
+
+        // Listen for mouse clicks.
+        canv.addEventListener("mousedown", function (e) {
+          mouseDown = true;
+          mouseX = e.pageX;
+          mouseY = e.pageY;
+          console.log("Mouse Pressed at: " + mouseX + ", " + mouseY);
+        });
+
+        // Listen for mouse unclicks.
+        canv.addEventListener("mouseup", function (e) {
+          mouseDown = false;
+        });
+
+        // Listen for mouse movements.
+        canv.addEventListener("mousemove", function (e) {
+          mouseX = e.pageX;
+          mouseY = e.pageY;
+          // console.log(Math.floor(window.innerHeight / 2) + ":" + mouseX);
+          if (
+            Math.abs(mouseX - Math.floor(window.innerWidth / 2) <= 5) &&
+            Math.abs(mouseY - Math.floor(window.innerHeight / 2) <= 5)
+          )
+            if (
+              Math.abs(mouseX - Math.floor(window.innerWidth / 2) == 0) &&
+              Math.abs(mouseY - Math.floor(window.innerHeight / 2) == 0)
+            ) {
+              console.log(
+                "Center Reached! Mouse Position: " + mouseX + ", " + mouseY
+              );
+            }
+        });
+
+        // Keys to listen for.
+        const controlKeys = {
+          Space: false,
+          ArrowUp: false,
+          ArrowDown: false,
+          KeyP: false,
+          KeyD: false,
+          KeyS: false,
+          KeyG: false,
+          KeyA: false,
+          KeyC: false,
+          KeyR: false,
+          KeyF: false,
+          KeyT: false,
+          KeyM: false,
+          KeyE: false,
+          KeyI: false,
+          KeyN: false,
+          KeyB: false,
+          KeyV: false,
+          KeyW: false,
+          Digit0: false,
+          Digit1: false,
+          Digit2: false,
+          Digit3: false,
+          Digit4: false,
+          ArrowRight: false,
+          ArrowLeft: false,
+          Comma: false,
+          Period: false,
+          Delete: false,
+        };
+
+        // Listen for keys are pressed.
+        document.addEventListener("keydown", (event) => {
+          controlKeys[event.code] = true;
+        });
+
+        // Listen for when keys are released.
+        document.addEventListener("keyup", (event) => {
+          controlKeys[event.code] = false;
+        });
+
+        // Pulls circles toward or push away from the mouse when it is down.
+        function handleMouseInteraction() {
+          var dx, dy, i, circle;
+          if (mouseDown) {
+            for (i = 0; i < numCircles; i++) {
+              circle = circles[i];
+              dx = mouseX - circle.x;
+              dy = mouseY - circle.y;
+              circle.vx += dx * pullStrength;
+              circle.vy += dy * pullStrength;
+            }
+          }
+        }
+
+        // Adjust polarity when P is pressed.
+        function adjustPolarity() {
+          if (controlKeys["KeyP"]) {
+            if (controlKeys["Space"]) {
+              polarity = 0;
+              console.log("Resetting polarity to " + polarity);
+            }
+            if (controlKeys["ArrowUp"]) {
+              polarity += 0.05;
+              console.log("Increasing polarity to " + polarity);
+            }
+            if (controlKeys["ArrowDown"]) {
+              polarity += -0.05;
+              console.log("Decreasing polarity to " + polarity);
+            }
+            if (controlKeys["Comma"]) {
+              polarity = outputData.polarityFactor.minValue;
+              console.log("Decreasing polarity to " + polarity);
+            }
+            if (controlKeys["Period"]) {
+              polarity = outputData.polarityFactor.maxValue;
+              console.log("Increasing polarity to max value of " + polarity);
+            }
+          }
+        }
+
+        // Adjust dampening when D is pressed.
+        function adjustDampening() {
+          if (controlKeys["KeyD"]) {
+            if (controlKeys["Space"]) {
+              dampening = 1.0;
+              console.log("Resetting dampening to " + dampening);
+            }
+            if (controlKeys["ArrowUp"]) {
+              dampening += 0.001;
+              console.log("Increasing dampening to " + dampening);
+            }
+            if (controlKeys["ArrowDown"]) {
+              dampening += -0.001;
+              console.log("Decreasing dampening to " + dampening);
+            }
+            if (controlKeys["Comma"]) {
+              dampening = outputData.dampeningFactor.minValue;
+              console.log("Decreasing dampening to min value of " + dampening);
+            }
+            if (controlKeys["Period"]) {
+              dampening = outputData.dampeningFactor.maxValue;
+              console.log("Increasing dampening to max value of " + dampening);
+            }
+          }
+        }
+
+        // Adjust size when S is pressed.
+        function adjustSize() {
+          if (controlKeys["KeyS"]) {
+            if (controlKeys["Space"]) {
+              console.log("Resetting circle size...");
+              for (i = 0; i < numCircles; i++) {
+                circle = circles[i];
+                if (circle.radius < Math.min(canv.width, canv.height)) {
+                  circle.radius += -sizeTracker;
+                }
+              }
+              sizeTracker = 0;
+            }
+            if (controlKeys["ArrowUp"]) {
+              for (i = 0; i < numCircles; i++) {
+                circle = circles[i];
+                if (circle.radius < Math.min(canv.width, canv.height)) {
+                  circle.radius += 1;
+                }
+              }
+              console.log("Increasing circle size to " + circle.radius);
+              sizeTracker += 1;
+            }
+            if (controlKeys["ArrowDown"]) {
+              for (i = 0; i < numCircles; i++) {
+                circle = circles[i];
+                if (circle.radius > outputData.circleRadiusFactor.minValue) {
+                  circle.radius += -1;
+                }
+              }
+              console.log("Decreasing circle size to " + circle.radius);
+              sizeTracker += -1;
+            }
+            if (controlKeys["Comma"]) {
+              for (i = 0; i < numCircles; i++) {
+                circle = circles[i];
+                if (circle.radius > outputData.circleRadiusFactor.minValue) {
+                  sizeTracker +=
+                    circle.radius - outputData.circleRadiusFactor.minValue;
+                  circle.radius = outputData.circleRadiusFactor.minValue;
+                }
+              }
+              console.log(
+                "Decreasing circle size to min value of " + circle.radius
+              );
+            }
+            if (controlKeys["Period"]) {
+              for (i = 0; i < numCircles; i++) {
+                circle = circles[i];
+                if (circle.radius < Math.min(canv.width, canv.height)) {
+                  sizeTracker +=
+                    outputData.circleRadiusFactor.maxValue - circle.radius;
+                  circle.radius = Math.min(
+                    canv.width,
+                    canv.height,
+                    outputData.circleRadiusFactor.maxValue
+                  );
+                }
+              }
+              console.log(
+                "Increasing circle size to max value of " + circle.radius
+              );
+            }
+          }
+        }
+
+        // Adjust circle count when N is pressed.
+        function adjustCircleCount() {
+          if (controlKeys["KeyN"]) {
+            if (controlKeys["Space"]) {
+              console.log("Resetting Count Doesn't work yet...");
+            }
+            if (controlKeys["ArrowUp"]) {
+              numCircles += 1;
+              console.log("Increasing number of circles to " + numCircles);
+              circles.push({
+                x: Math.random() * canv.width,
+                y: Math.random() * canv.height,
+                // (vx, vy) = Velocity vector
+                vx: 0,
+                vy: 0,
+                radius: circles[0].radius,
+              });
+              //   circleCountTracker += 1;
+            }
+            if (controlKeys["ArrowDown"]) {
+              numCircles += -1;
+              console.log("Decreasing number of circles to " + numCircles);
+              //   circleCountTracker += -1;
+            }
+          }
+        }
+
+        // Adjust velocity when arrows are pressed.
+        function adjustSpeed() {
+          if (controlKeys["ArrowRight"]) {
+            console.log("Increasing speed...");
+            for (i = 0; i < numCircles; i++) {
+              circle = circles[i];
+              circle.vx *= 1.1;
+              circle.vy *= 1.1;
+              speedTracker *= 1.1;
+            }
+          }
+          if (controlKeys["ArrowLeft"]) {
+            console.log("Decreasing speed...");
+            for (i = 0; i < numCircles; i++) {
+              circle = circles[i];
+              circle.vx *= 0.9;
+              circle.vy *= 0.9;
+              speedTracker *= 0.9;
+            }
+          }
+        }
+
+        // Adjust gravity when G is pressed
+        function adjustGravity() {
+          if (controlKeys["KeyV"]) {
+            if (controlKeys["Space"]) {
+              gravity = 0;
+              console.log("Resetting vertical gravity to " + gravity);
+            }
+            if (controlKeys["ArrowUp"]) {
+              gravity += 0.005;
+              console.log("Increasing vertical gravity to " + gravity);
+            }
+            if (controlKeys["ArrowDown"]) {
+              gravity += -0.005;
+              console.log("Decreasing vertical gravity to " + gravity);
+            }
+            if (controlKeys["Comma"]) {
+              gravity = outputData.gravityFactor.minValue;
+              console.log(
+                "Decreasing vertical gravity to min value of " + gravity
+              );
+            }
+            if (controlKeys["Period"]) {
+              gravity = outputData.gravityFactor.maxValue;
+              console.log(
+                "Increasing vertical gravity to max value of " + gravity
+              );
+            }
+          }
+        }
+
+        // Adjust trail when T is pressed.
+        function adjustTrail() {
+          if (controlKeys["KeyT"]) {
+            if (controlKeys["Space"]) {
+              trailAlpha += -trailAlpha;
+              console.log("Resetting trail transparency to " + trailAlpha);
+            }
+            if (controlKeys["ArrowUp"]) {
+              if (trailAlpha <= outputData.trailAlpha.maxValue) {
+                trailAlpha += 0.01;
+                trailTracker += 0.01;
+                console.log("Increasing trail transparency to " + trailAlpha);
+              }
+            }
+            if (controlKeys["ArrowDown"]) {
+              if (trailAlpha >= outputData.trailAlpha.minValue) {
+                trailAlpha += -0.01;
+                trailTracker += -0.01;
+                console.log("Decreasing trail transparency to " + trailAlpha);
+              }
+            }
+            if (controlKeys["Comma"]) {
+              trailTracker = outputData.trailAlpha.maxValue - trailAlpha;
+              trailAlpha = outputData.trailAlpha.minValue;
+              console.log(
+                "Decreasing trail transparency to min value of " + trailAlpha
+              );
+            }
+            if (controlKeys["Period"]) {
+              trailTracker = trailAlpha - outputData.trailAlpha.maxValue;
+              trailAlpha = outputData.trailAlpha.maxValue;
+              console.log(
+                "Increasing trail transparency to max value of " + trailAlpha
+              );
+            }
+          }
+        }
+
+        // Reverse all circles when R is pressed.
+        function reverseCircles() {
+          if (controlKeys["Delete"]) {
+            console.log("Reversing Circles...");
+            for (i = 0; i < numCircles; i++) {
+              circle = circles[i];
+              circle.vx *= -1.0;
+              circle.vy *= -1.0;
+            }
+          }
+        }
+
+        // Switch mouse pull/push when M is pressed.
+        function mouseEffect() {
+          if (controlKeys["KeyM"]) {
+            if (controlKeys["Space"]) {
+              pullStrength = -0.0005;
+              console.log("Resetting pull strength to " + pullStrength);
+            }
+            if (controlKeys["ArrowUp"]) {
+              pullStrength += 0.0001;
+              console.log("Increasing pull strength to " + pullStrength);
+            }
+            if (controlKeys["ArrowDown"]) {
+              pullStrength -= 0.0001;
+              console.log("Decreasing pull strength to " + pullStrength);
+            }
+          }
+        }
+
+        // Adjust colors (circles and window)
+        function adjustColors() {
+          if (controlKeys["KeyC"]) {
+            if (controlKeys["KeyR"]) {
+              if (controlKeys["ArrowUp"]) {
+                outputData.redColorFactor.outputValue = Math.min(
+                  outputData.redColorFactor.outputValue + 5,
+                  outputData.redColorFactor.maxValue
+                );
+                console.log(
+                  "Increasing circle red color factor to " +
+                    outputData.redColorFactor.outputValue
+                );
+              }
+              if (controlKeys["ArrowDown"]) {
+                outputData.redColorFactor.outputValue = Math.max(
+                  outputData.redColorFactor.outputValue - 5,
+                  outputData.redColorFactor.minValue
+                );
+                console.log(
+                  "Decreasing circle red color factor to " +
+                    outputData.redColorFactor.outputValue
+                );
+              }
+              if (controlKeys["Comma"]) {
+                outputData.redColorFactor.outputValue =
+                  outputData.redColorFactor.minValue;
+                console.log(
+                  "Decreasing circle red color factor to min value of " +
+                    outputData.redColorFactor.outputValue
+                );
+              }
+              if (controlKeys["Period"]) {
+                outputData.redColorFactor.outputValue =
+                  outputData.redColorFactor.maxValue;
+                console.log(
+                  "Increasing circle red color factor to max value of " +
+                    outputData.redColorFactor.outputValue
+                );
+              }
+            }
+            if (controlKeys["KeyG"]) {
+              if (controlKeys["ArrowUp"]) {
+                outputData.greenColorFactor.outputValue = Math.min(
+                  outputData.greenColorFactor.outputValue + 5,
+                  outputData.greenColorFactor.maxValue
+                );
+                console.log(
+                  "Increasing circle green color factor to " +
+                    outputData.greenColorFactor.outputValue
+                );
+              }
+              if (controlKeys["ArrowDown"]) {
+                outputData.greenColorFactor.outputValue = Math.max(
+                  outputData.greenColorFactor.outputValue - 5,
+                  outputData.greenColorFactor.minValue
+                );
+                console.log(
+                  "Decreasing circle green color factor to " +
+                    outputData.greenColorFactor.outputValue
+                );
+              }
+              if (controlKeys["Comma"]) {
+                outputData.greenColorFactor.outputValue =
+                  outputData.greenColorFactor.minValue;
+                console.log(
+                  "Decreasing circle green color factor to min value of " +
+                    outputData.greenColorFactor.outputValue
+                );
+              }
+              if (controlKeys["Period"]) {
+                outputData.greenColorFactor.outputValue =
+                  outputData.greenColorFactor.maxValue;
+                console.log(
+                  "Increasing circle green color factor to max value of " +
+                    outputData.greenColorFactor.outputValue
+                );
+              }
+            }
+            if (controlKeys["KeyB"]) {
+              if (controlKeys["ArrowUp"]) {
+                outputData.blueColorFactor.outputValue = Math.min(
+                  outputData.blueColorFactor.outputValue + 5,
+                  outputData.blueColorFactor.maxValue
+                );
+                console.log(
+                  "Increasing circle blue color factor to " +
+                    outputData.blueColorFactor.outputValue
+                );
+              }
+              if (controlKeys["ArrowDown"]) {
+                outputData.blueColorFactor.outputValue = Math.max(
+                  outputData.blueColorFactor.outputValue - 5,
+                  outputData.blueColorFactor.minValue
+                );
+                console.log(
+                  "Decreasing circle blue color factor to " +
+                    outputData.blueColorFactor.outputValue
+                );
+              }
+              if (controlKeys["Comma"]) {
+                outputData.blueColorFactor.outputValue =
+                  outputData.blueColorFactor.minValue;
+                console.log(
+                  "Decreasing circle blue color factor to min value of " +
+                    outputData.blueColorFactor.outputValue
+                );
+              }
+              if (controlKeys["Period"]) {
+                outputData.blueColorFactor.outputValue =
+                  outputData.blueColorFactor.maxValue;
+                console.log(
+                  "Increasing circle blue color factor to max value of " +
+                    outputData.blueColorFactor.outputValue
+                );
+              }
+            }
+          }
+
+          //Adjust window colors
+          if (controlKeys["KeyW"]) {
+            if (controlKeys["KeyR"]) {
+              if (controlKeys["ArrowUp"]) {
+                outputData.redWindowColor.outputValue = Math.min(
+                  outputData.redWindowColor.outputValue + 5,
+                  outputData.redWindowColor.maxValue
+                );
+                console.log(
+                  "Increasing window red color factor to " +
+                    outputData.redWindowColor.outputValue
+                );
+              }
+              if (controlKeys["ArrowDown"]) {
+                outputData.redWindowColor.outputValue = Math.max(
+                  outputData.redWindowColor.outputValue - 5,
+                  outputData.redWindowColor.minValue
+                );
+                console.log(
+                  "Decreasing window red color factor to " +
+                    outputData.redWindowColor.outputValue
+                );
+              }
+              if (controlKeys["Comma"]) {
+                outputData.redWindowColor.outputValue =
+                  outputData.redWindowColor.minValue;
+                console.log(
+                  "Decreasing window red color factor to min value of " +
+                    outputData.redWindowColor.outputValue
+                );
+              }
+              if (controlKeys["Period"]) {
+                outputData.redWindowColor.outputValue =
+                  outputData.redWindowColor.maxValue;
+                console.log(
+                  "Increasing window red color factor to max value of " +
+                    outputData.redWindowColor.outputValue
+                );
+              }
+            }
+            if (controlKeys["KeyG"]) {
+              if (controlKeys["ArrowUp"]) {
+                outputData.greenWindowColor.outputValue = Math.min(
+                  outputData.greenWindowColor.outputValue + 5,
+                  outputData.greenWindowColor.maxValue
+                );
+                console.log(
+                  "Increasing window green color factor to " +
+                    outputData.greenWindowColor.outputValue
+                );
+              }
+              if (controlKeys["ArrowDown"]) {
+                outputData.greenWindowColor.outputValue = Math.max(
+                  outputData.greenWindowColor.outputValue - 5,
+                  outputData.greenWindowColor.minValue
+                );
+                console.log(
+                  "Decreasing window green color factor to " +
+                    outputData.greenWindowColor.outputValue
+                );
+              }
+              if (controlKeys["Comma"]) {
+                outputData.greenWindowColor.outputValue =
+                  outputData.greenWindowColor.minValue;
+                console.log(
+                  "Decreasing window green color factor to min value of " +
+                    outputData.greenWindowColor.outputValue
+                );
+              }
+              if (controlKeys["Period"]) {
+                outputData.greenWindowColor.outputValue =
+                  outputData.greenWindowColor.maxValue;
+                console.log(
+                  "Increasing window green color factor to max value of " +
+                    outputData.greenWindowColor.outputValue
+                );
+              }
+            }
+            if (controlKeys["KeyB"]) {
+              if (controlKeys["ArrowUp"]) {
+                outputData.blueWindowColor.outputValue = Math.min(
+                  outputData.blueWindowColor.outputValue + 5,
+                  outputData.blueWindowColor.maxValue
+                );
+                console.log(
+                  "Increasing window blue color Factor to " +
+                    outputData.blueWindowColor.outputValue
+                );
+              }
+              if (controlKeys["ArrowDown"]) {
+                outputData.blueWindowColor.outputValue = Math.max(
+                  outputData.blueWindowColor.outputValue - 5,
+                  outputData.blueWindowColor.minValue
+                );
+                console.log(
+                  "Decreasing window blue color Factor to " +
+                    outputData.blueWindowColor.outputValue
+                );
+              }
+              if (controlKeys["Comma"]) {
+                outputData.blueWindowColor.outputValue =
+                  outputData.blueWindowColor.minValue;
+                console.log(
+                  "Decreasing window blue color Factor to min value of " +
+                    outputData.blueWindowColor.outputValue
+                );
+              }
+              if (controlKeys["Period"]) {
+                outputData.blueWindowColor.outputValue =
+                  outputData.blueWindowColor.maxValue;
+                console.log(
+                  "Increasing window blue color Factor to max value of " +
+                    outputData.blueWindowColor.outputValue
+                );
+              }
+            }
+          }
+        }
+
+        // Funky color for all circles when F is pressed.
+        function funkyCircles() {
+          if (controlKeys["KeyF"]) {
+            funkyTime = !funkyTime;
+            if (funkyTime == true) {
+              console.log("We want the funk!");
+            } else {
+              console.log("We gave up that funk!");
+            }
+          }
+        }
+
+        // Align cirlces in a grid when A is pressed.
+        function alignGrid() {
+          if (controlKeys["KeyA"]) {
+            // Get to closest perfect square
+            let N = numCircles;
+            var distToPerfSquare = getClosestPerfectSquare(N);
+
+            if (distToPerfSquare >= 0) {
+              for (let i = 0; i < distToPerfSquare; i++) {
+                numCircles += 1;
+                console.log("Increasing Count to " + numCircles);
+                circles.push({
+                  x: Math.random() * canv.width,
+                  y: Math.random() * canv.height,
+                  // (vx, vy) = Velocity vector
+                  vx: 0,
+                  vy: 0,
+                  radius: circles[0].radius,
+                });
+              }
+            } else {
+              for (let i = 0; i > distToPerfSquare; i--) {
+                numCircles += -1;
+                console.log("Decreasing Count to " + numCircles);
+              }
+            }
+
+            gravity = 0;
+            polarity = 0;
+            dampening = 1;
+
+            console.log("canv dimensions= " + canv.width, canv.height);
+            console.log("numCircles= " + numCircles);
+            console.log("circle radius= " + circles[0].radius);
+
+            // Determine size of array
+            var arrDimX = Math.sqrt(numCircles),
+              arrDimY = Math.sqrt(numCircles);
+
+            if (numCircles > arrDimX * arrDimY) {
+              arrDimY += 2;
+            }
+
+            var circleSize = circles[0].radius * 2,
+              spaceBetweenCirclesX =
+                (canv.width - arrDimX * circleSize) / (arrDimX + 1),
+              spaceBetweenCirclesY =
+                (canv.height - arrDimY * circleSize) / (arrDimY + 1);
+
+            var arrGridCoordinates = [];
+            var arrCounter = 0;
+            for (xCounter = 1; xCounter <= arrDimX; xCounter++) {
+              for (yCounter = 1; yCounter <= arrDimY; yCounter++) {
+                arrGridCoordinates.push([
+                  xCounter * (circleSize + spaceBetweenCirclesX) -
+                    circleSize / 2,
+                  yCounter * (circleSize + spaceBetweenCirclesY) -
+                    circleSize / 2,
+                ]);
+                arrCounter++;
+              }
+            }
+
+            for (let i = 0; i < numCircles; i++) {
+              circle = circles[i];
+              circle.vx *= 0.0;
+              circle.vy *= 0.0;
+              circle.x = arrGridCoordinates[i][0];
+              circle.y = arrGridCoordinates[i][1];
+            }
+          }
+          gDown = false;
+        }
+
+        function isPerfect(N) {
+          console.log("Checking if this is perfect square: " + N);
+          if (Math.sqrt(N) - Math.floor(Math.sqrt(N)) != 0) return false;
+          return true;
+        }
+
+        // Function to find the closest perfect square
+        // taking minimum steps to reach from a number
+        function getClosestPerfectSquare(N) {
+          console.log("Starting with: " + N);
+          var diffToUse = 0;
+          if (isPerfect(N)) {
+            return;
+          }
+
+          // Variables to store first perfect
+          // square number
+          // above and below N
+          let aboveN = -1,
+            belowN = -1;
+          let n1;
+
+          // Finding first perfect square
+          // number greater than N
+          n1 = N + 1;
+          while (true) {
+            if (isPerfect(n1)) {
+              aboveN = n1;
+              break;
+            } else n1++;
+          }
+
+          // Finding first perfect square
+          // number less than N
+          n1 = N - 1;
+          while (true) {
+            if (isPerfect(n1)) {
+              belowN = n1;
+              break;
+            } else n1--;
+          }
+
+          // Variables to store the differences
+          let diff1 = aboveN - N;
+          let diff2 = N - belowN;
+
+          if (diff1 <= diff2) {
+            diffToUse = diff1;
+          } else {
+            diffToUse = -diff2;
+          }
+          console.log(diffToUse);
+          return diffToUse;
+        }
+
+        // All cirlces move towards or away from the center point of the canvas
+        function explodeImplode() {
+          if (
+            controlKeys["Digit1"] ||
+            controlKeys["Digit2"] ||
+            controlKeys["Digit3"] ||
+            controlKeys["Digit4"] ||
+            controlKeys["Digit0"]
+          ) {
+            var dx, dy, i, circle;
+            var eventSpotX = 0,
+              eventSpotY = 0;
+            var pushMultiplier = -1;
+
+            if (controlKeys["Digit0"]) {
+              (eventSpotX = window.innerWidth / 2),
+                (eventSpotY = window.innerHeight / 2);
+            }
+            if (controlKeys["Digit1"]) {
+              (eventSpotX = 0), (eventSpotY = 0);
+            }
+            if (controlKeys["Digit2"]) {
+              (eventSpotX = window.innerWidth), (eventSpotY = 0);
+            }
+            if (controlKeys["Digit3"]) {
+              (eventSpotX = window.innerWidth),
+                (eventSpotY = window.innerHeight);
+            }
+            if (controlKeys["Digit4"]) {
+              (eventSpotX = 0), (eventSpotY = window.innerHeight);
+            }
+
+            if (controlKeys["KeyE"]) {
+              console.log("BOOM!");
+              pushMultiplier = 1;
+              for (i = 0; i < numCircles; i++) {
+                circle = circles[i];
+                dx = eventSpotX - circle.x;
+                dy = eventSpotY - circle.y;
+                circle.vx += dx * pushMultiplier * pullStrength;
+                circle.vy += dy * pushMultiplier * pullStrength;
+              }
+            }
+            if (controlKeys["KeyI"]) {
+              console.log("ZZRP!");
+              pushMultiplier = -1;
+              for (i = 0; i < numCircles; i++) {
+                circle = circles[i];
+                dx = eventSpotX - circle.x;
+                dy = eventSpotY - circle.y;
+                circle.vx += dx * pushMultiplier * pullStrength;
+                circle.vy += dy * pushMultiplier * pullStrength;
+              }
+            }
+          }
+        }
+        // Run the circles functions
+        initializeCircles();
+
+        // Start animation
+        executeFrame();
+        fxpreview();
+      })();
+    </script>
+  </body>
+</html>
